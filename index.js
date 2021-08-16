@@ -1,15 +1,19 @@
+const LAMBDA_NAME = 'phoneNumberConverter'
 const dynamoDbHelper = require('./dynamoDbHelper.js')
 const LambdaHelper = require('./LambdaHelper.js')
 const checkWord = require('check-word')
-const { eventNames, send } = require('process')
-words = checkWord('en')
-// const phoneUtil = require('libphonenumber-js').PhoneNumberUtil.getInstance();
+
+words = checkWord('en') // Using check-word to determine if any of the letter combinations are actual English words. If they are, then they will be added to the "top 5" list to be saved to DynamoDb
 
 exports.handler = async (event) => {
+    const originalEvent = JSON.parse(JSON.stringify(event))
+
     try {
         // Here we'll want the process to go as follows
             // 1. Take in the phone number, validate, then format it to a uniform format that will go through the conversion process in
-            console.log('PHONE', event.body.phoneNumber)
+            console.log('PHONE', event)
+            const receivedAttribute = event['Details']['Parameters'].phoneNumber
+            console.log('RECEIVED ATTRIBUTE', receivedAttribute)
             // const number = phoneUtil.parseAndKeepRawInput(event.body.phoneNumber, 'US');
             // console.log('NUM', number)
             const validatedNumberResult = await validatedNumber(event)
@@ -19,17 +23,22 @@ exports.handler = async (event) => {
             const searchForValidWordsResults = await searchForValidResults(numberLetterCombosResults, event)
             console.log('SEARCH FOR VALID', searchForValidWordsResults)
             // 4. Send that list over to DynamoDb
-            // 5. DON'T FOREGET to save the incoming number to DynamoDb as well
+            // 5. DON'T FORGET to save the incoming number to DynamoDb as well
+            LambdaHelper.formatResponseData(null, originalEvent, searchForValidWordsResults, LAMBDA_NAME)
+            return searchForValidWordsResults
     } catch (error) {
-        
+        console.error('SOMETHING WENT WRONG', error)
+        LambdaHelper.formatResponseData(error, originalEvent, null, LAMBDA_NAME)
     }
 }
 
 validatedNumber = async (event) => {
     try {
-        const validNumber = event.body.phoneNumber
+        const validNumber = event['Details']['Parameters'].phoneNumber
+        const lastFour = validNumber.slice(-4)
+        console.log('LAST FOUR DIGITS', lastFour)
         // If the number includes '1' or '0' break it up to separate those numbers from the others
-        return validNumber
+        return lastFour
     } catch (error) {
         return console.error(error)
     }
@@ -72,25 +81,24 @@ numberLetterCombos = async (digits) => {
             }
           
             dfs(0, digits, []);
-          
+          console.log('RESULT', result)
             return result
           
     } catch (error) {
         return console.error(error)
     }
 }
-// console.log('LETTER COMBOS', numberLetterCombos("3101"))
 
 searchForValidResults = async (numberLetterCombosResults, event) => {
-    const phoneNumber = event.body.phoneNumber
+    const phoneNumber = event['Details']['Parameters'].phoneNumber
+    const firstSix = phoneNumber.slice(2, 8)
     try {
-        const conditions = ['0', '1']
+        const conditions = ['0', '1'] // These numbers don't have letters in the alphabet attached to them in the phone dial system
         let validWords = []
-        if(conditions.some(el => phoneNumber.includes(el))) {
+        if(conditions.some(el => phoneNumber.includes(el))) { // Remove numbers from 
             numberLetterCombosResults.forEach(val => {
                 const chars = {'1': '', '0': ''};
                 val = val.replace(/[10]/g, m => chars[m])
-                // console.log('VAL', val)
                 if(words.check(val)) {
                     console.log('FOUND ONE', val)
                     validWords.push(val)
@@ -100,7 +108,7 @@ searchForValidResults = async (numberLetterCombosResults, event) => {
             })
         } else {
             numberLetterCombosResults.forEach(val => {
-                console.log('CHECKING FOR WORDS')
+                // console.log('CHECKING FOR WORDS')
                 if (words.check(val)) {
                   console.log('FOUND A WORD', val)
                   validWords.push(val)
@@ -109,13 +117,29 @@ searchForValidResults = async (numberLetterCombosResults, event) => {
                 }
               })
         }
-
+        if (validWords.length < 5) { // If 5 valid english words aren't found then fill the 5 list with letter combos
+            const diff = 5 - validWords.length
+            const fillRemainder = numberLetterCombosResults.slice(0, diff)
+            console.log('FILL REMAINDER', fillRemainder)
+            fillRemainder.forEach(val => {
+                validWords.push(val)
+            })
+        }
+        console.log('VALID WORDS', validWords)
         const sendToDynamo = await dynamoDbHelper.putItem('vanityPhoneNumbers', {
-            "phoneNumber": event.body.phoneNumber,
+            "phoneNumber": event['Details']['Parameters'].phoneNumber,
             "topVanityResults": [validWords]
         })
         console.log('SENTTODYNAMO', sendToDynamo)
-        return validWords
+        const vantiyNumberList = {
+            testList: validWords[0],
+            testList2: validWords[1],
+            testList3: validWords[2],
+            testList4: validWords[3],
+            testList5: validWords[4],
+            first6Digits: firstSix
+        }
+        return vantiyNumberList
     } catch (error) {
         console.error(error)
     }
